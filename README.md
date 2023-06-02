@@ -1,4 +1,4 @@
-# self-improving-ai
+# Self Improving AI - Giving AI the ability to change it's own prompt
 
 Install dependencies:
 ```bash
