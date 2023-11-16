@@ -57,7 +57,7 @@ def get_init_prompt():
 
     Goal: the goal you are built to accomplish
     Thought: you should always think about what to do
-    Action: the action to take, should be one of [{tool_names}]
+    Action: the action to take, must be one of [{tool_names}]
     Action Input: the input to the action
     Observation: the result of the action
     ... (this Thought/Action/Action Input/Observation can repeat N times)
@@ -65,6 +65,10 @@ def get_init_prompt():
     Final Summary: a final memo summarizing what was accomplished
     Constraints: {constraints}
     Tips: {tips}
+
+    By the way, this is the current state of the world:
+
+    {current_world_state}
 
     Begin!
 
@@ -85,7 +89,7 @@ def initialize_agent(david_instantiation_prompt: str):
         tools=tools,
         # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
         # This includes the `intermediate_steps` variable because that is needed
-        input_variables=["input", "constraints", "tips", "intermediate_steps"]
+        input_variables=["input", "constraints", "tips", "intermediate_steps", "current_world_state"]
     )
     # LLM chain consisting of the LLM and a prompt
     llm_chain = LLMChain(llm=agent_llm, prompt=prompt)
@@ -99,6 +103,42 @@ def initialize_agent(david_instantiation_prompt: str):
     agent_executor = AgentExecutor.from_agent_and_tools(agent=agent, tools=tools, verbose=True)
     return agent_executor
 
+def initialize_world_state_chain():
+    """Initializes and returns a world state chain."""
+    world_state_template="""
+    Given the current state of the world:
+
+    {current_world_state}
+
+    And Given the following series of actions and observations:
+
+    ###Actions and Observations###
+    {david_execution}
+    ###End of Actions and Observations###
+
+Generate a comprehensive model of the world that includes:
+
+1. A description of the current state of the environment.
+2. A summary of the actions taken and their results.
+3. Any constraints, limitations, or rules that apply to the environment.
+4. Relevant information or context that is necessary to understand the current state of the world. For instance the arn, or at least bucket name, of a bucket that is being used to reach the goal should be recorded.
+
+In other words, synthesize the information provided to build a model of the world in which the AI is operating.
+The goal the AI is trying to accomplish is the following: {goal}.
+    """
+
+    world_state_prompt = PromptTemplate(
+        input_variables=["goal", "david_execution", "current_world_state"], 
+        template=world_state_template
+    )
+
+    world_state_chain = LLMChain(
+        llm=ChatOpenAI(temperature=0, model_name="gpt-4"), 
+        prompt=world_state_prompt, 
+        verbose=True, 
+    )
+    return world_state_chain
+
 def initialize_meta_chain():
     """Initializes and returns a language learning model chain."""
     meta_template="""{{I want to instantiate an AI I'm calling David who successfully accomplishes my GOAL.}}
@@ -108,6 +148,20 @@ def initialize_meta_chain():
     #######
 
     {goal}
+
+    ##############
+    END OF MY GOAL
+    ##############
+
+    ##########################
+    Current state of the world
+    ##########################
+
+    {current_world_state}
+
+    #################################
+    End of current state of the world
+    #################################
 
     ##############
     END OF MY GOAL
@@ -145,7 +199,7 @@ def initialize_meta_chain():
     """
 
     meta_prompt = PromptTemplate(
-        input_variables=["goal", "david_instantiation_prompt", "david_execution"], 
+        input_variables=["goal", "david_instantiation_prompt", "david_execution", "current_world_state"], 
         template=meta_template
     )
 
@@ -205,66 +259,70 @@ def main(goal, max_meta_iters=5):
     Returns:
         None.
     """
-    try:
-        david_instantiation_prompt = get_init_prompt()
-        constraints = "You cannot use the open command. Everything must be done in the terminal."
-        tips = "You are in a mac zshell."
-        evaluation_chain = initialize_evaluation_chain()
-        # Check if the CSV file exists
-        if os.path.isfile('successful_invocations.csv'):
-            # Load the dataframe from the CSV file
-            df = pd.read_csv('successful_invocations.csv')
-        else:
-            # Create a new DataFrame if the CSV file doesn't exist
-            df = pd.DataFrame(columns=['Goal', 'InstantiationPrompt', 'Constraints', 'Tips'])
-        for i in range(max_meta_iters):
-            print(f'[Episode {i+1}/{max_meta_iters}]')
-            agent = initialize_agent(david_instantiation_prompt)
-            try:
-                agent.run(input=goal, constraints=constraints, tips=tips)
-            except Exception as e:
-                print(f'Exception: {e}')
-                print('Continuing...')
-            execution_output = ''.join(cb.last_execution)
-            evaluation_output = evaluation_chain.predict(execution_output=execution_output, goal=goal)
-            if 'yes' in evaluation_output.strip().lower():
-                print("Goal has been accomplished!")
-                df = pd.concat([df, pd.DataFrame([{'Goal': goal, 'InstantiationPrompt': david_instantiation_prompt, 'Constraints': constraints, 'Tips': tips}])], ignore_index=True)
-                # Save the DataFrame back to the CSV file
-                df.to_csv('successful_invocations.csv', index=False)
-                break
-            meta_chain = initialize_meta_chain()
-            temp_prompt = PromptTemplate(
-                input_variables=["tool_names","tools","input","constraints","tips","agent_scratchpad"],
-                template=david_instantiation_prompt
-            )
-            temp_prompt = temp_prompt.format(
-                tools="Bash", 
-                tool_names="Bash Tool", 
-                input=goal, 
-                constraints=constraints, 
-                tips=tips, 
-                agent_scratchpad=""
-            )
-            meta_output = meta_chain.predict(
-                goal=goal, 
-                david_instantiation_prompt=temp_prompt,
-                david_execution=execution_output
-            )
-            print(f'New Prompt: {meta_output}')
-            constraints, tips = get_new_instructions(meta_output)
-            cb.last_execution = []
-            print(f'New Constraints: {constraints}')
-            print(f'New Tips: {tips}')
-
-    except Exception as e:
-        print(f'Error: {e}')
-        breakpoint()
+    david_instantiation_prompt = get_init_prompt()
+    constraints = "You cannot use the open command. Everything must be done in the terminal. You cannot use nano or vim."
+    tips = "You are in a mac zshell. You are already authenticated with AWS."
+    world_state_chain = initialize_world_state_chain()
+    current_world_state = "The world is empty and has just been initialized."
+    evaluation_chain = initialize_evaluation_chain()
+    # Check if the CSV file exists
+    if os.path.isfile('successful_invocations.csv'):
+        # Load the dataframe from the CSV file
+        df = pd.read_csv('successful_invocations.csv')
+    else:
+        # Create a new DataFrame if the CSV file doesn't exist
+        df = pd.DataFrame(columns=['Goal', 'InstantiationPrompt', 'Constraints', 'Tips'])
+    for i in range(max_meta_iters):
+        print(f'[Episode {i+1}/{max_meta_iters}]')
+        agent = initialize_agent(david_instantiation_prompt)
+        try:
+            agent.run(input=goal, constraints=constraints, tips=tips, current_world_state=current_world_state)
+        except Exception as e:
+            print(f'Exception: {e}')
+            print('Continuing...')
+        execution_output = ''.join(cb.last_execution)
+        evaluation_output = evaluation_chain.predict(execution_output=execution_output, goal=goal)
+        current_world_state = world_state_chain.predict(
+            current_world_state=current_world_state,
+            goal=goal, 
+            david_execution=''.join(cb.last_execution)
+        )
+        if 'yes' in evaluation_output.strip().lower():
+            print("Goal has been accomplished!")
+            df = pd.concat([df, pd.DataFrame([{'Goal': goal, 'InstantiationPrompt': david_instantiation_prompt, 'Constraints': constraints, 'Tips': tips}])], ignore_index=True)
+            # Save the DataFrame back to the CSV file
+            df.to_csv('successful_invocations.csv', index=False)
+            break
+        meta_chain = initialize_meta_chain()
+        temp_prompt = PromptTemplate(
+            input_variables=["tool_names","tools","input","constraints","tips","agent_scratchpad", "current_world_state"],
+            template=david_instantiation_prompt
+        )
+        temp_prompt = temp_prompt.format(
+            tools="Bash", 
+            tool_names="Bash Tool", 
+            input=goal, 
+            constraints=constraints, 
+            tips=tips, 
+            current_world_state=current_world_state,
+            agent_scratchpad=""
+        )
+        meta_output = meta_chain.predict(
+            goal=goal, 
+            david_instantiation_prompt=temp_prompt,
+            david_execution=execution_output,
+            current_world_state=current_world_state
+        )
+        print(f'New Prompt: {meta_output}')
+        constraints, tips = get_new_instructions(meta_output)
+        cb.last_execution = []
+        print(f'New Constraints: {constraints}')
+        print(f'New Tips: {tips}')
 
 if __name__ == '__main__':
     """Entry point of the script.
 
     Here we set the goal and call the main function.
     """
-    goal = 'Monitor system resources like CPU usage, memory, and disk space, and send an alert email if any of the parameters exceed a certain threshold.'
+    goal = """Set up AWS resources that work as follows: when a lambda fails the event should go into an SQS queue. Another lambda should then be invoked to further process the event."""
     main(goal)

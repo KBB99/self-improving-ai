@@ -1,8 +1,15 @@
 import os
 import subprocess
+import datetime
 
-DEFAULT_DIRECTORY = '/Users/kenton/Documents/ai/CodingCamel/BabyAGI/may-30/v1/'
-MAX_OUTPUT_LENGTH = 500
+# Get the current minute
+current_minute = datetime.datetime.now().strftime("%Y%m%d%H%M")
+
+# Create the directory path based on the current minute
+DEFAULT_DIRECTORY = f"/tmp/ai2bash/playground/{current_minute}/"
+MAX_OUTPUT_LENGTH = 1000
+
+env_vars = os.environ.copy()
 
 class BashTool:
     """A class to encapsulate the functionality of running bash commands."""
@@ -42,10 +49,10 @@ class BashTool:
                     else:
                         return "Error: Directory not found."
             else:
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True, cwd=self.directory)
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True, cwd=self.directory, env=env_vars)
                 current_output = result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
                 output += current_output + '\n'
-        if len(output.strip()) > 500:
-            return f"{output.strip()[:500]} ... This portion of the response was truncated due to length... {output.strip()[-500:]}"  # Truncate the response to a maximum of 1,000 characters
+        if len(output) > MAX_OUTPUT_LENGTH:
+            return f"{output.strip()[:MAX_OUTPUT_LENGTH]} \n ###The rest of the response was truncated due to length####\n"  # Truncate the response to a maximum of 1,000 characters
         else:
             return output.strip()
