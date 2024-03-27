@@ -2,7 +2,9 @@ from langchain import OpenAI, LLMChain, PromptTemplate
 from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent
 from langchain import LLMChain
 from langchain.chat_models import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from bash_tool import BashTool
+from file_tool import FileTool
 from callback_manager import CallbackManager
 from custom_classes import CustomPromptTemplate, CustomOutputParser
 import re
@@ -12,18 +14,27 @@ import pandas as pd
 # Constants
 MAX_META_ITERS = 5
 TEMPERATURE = 0
-MODEL_NAME = "gpt-4"
+# MODEL_NAME = "gpt-4"
+MODEL_NAME = "claude-3-opus-20240229"
 TIMEOUT = 9999
 STREAMING = True
 
 # Initialize tools
 bash_tool = BashTool()
+file_tool = FileTool()
 
 tools = [
     Tool(
         name="Bash",
         func=bash_tool.run_command,
         description="Execute bash commands"
+    ),
+    Tool(
+        name="File Writer",
+        func=file_tool.write_file,
+        description="""Useful to write a file to a given path with a given content. 
+        The input to this tool should be a pipe (|) separated text 
+        of length two, representing the path of the file."""
     )
 ]
 
@@ -32,14 +43,20 @@ output_parser = CustomOutputParser()
 cb = CallbackManager()
 
 # Initialize language learning model
-agent_llm = ChatOpenAI(
+# agent_llm = ChatOpenAI(
+#     temperature=TEMPERATURE, 
+#     model_name=MODEL_NAME,
+#     callbacks=[cb],
+#     request_timeout=TIMEOUT,
+#     streaming=STREAMING,
+# )
+agent_llm = ChatAnthropic(
     temperature=TEMPERATURE, 
     model_name=MODEL_NAME,
     callbacks=[cb],
-    request_timeout=TIMEOUT,
+    # request_timeout=TIMEOUT,
     streaming=STREAMING,
 )
-
 
 def get_init_prompt():
     """Returns initial prompt for the Agent."""
@@ -49,7 +66,7 @@ def get_init_prompt():
 
     Never give up until you accomplish your goal.
 
-    You have access to the following tool:
+    You have access to the following tools:
 
     {tools}
 
@@ -261,7 +278,7 @@ def main(goal, max_meta_iters=5):
     """
     david_instantiation_prompt = get_init_prompt()
     constraints = "You cannot use the open command. Everything must be done in the terminal. You cannot use nano or vim."
-    tips = "You are in a mac zshell. You are already authenticated with AWS."
+    tips = "You are in a mac zshell. You are already authenticated with AWS. CDK is already installed. To write to a file use the File Writer tool."
     world_state_chain = initialize_world_state_chain()
     current_world_state = "The world is empty and has just been initialized."
     evaluation_chain = initialize_evaluation_chain()
@@ -324,5 +341,5 @@ if __name__ == '__main__':
 
     Here we set the goal and call the main function.
     """
-    goal = """Set up AWS resources that work as follows: when a lambda fails the event should go into an SQS queue. Another lambda should then be invoked to further process the event."""
+    goal = """Deploy this project to AWS and return the url through which it can be accessed. Dockerize, deploy, and test it: https://github.com/0ssamaak0/SiriLLama."""
     main(goal)
